@@ -50,7 +50,8 @@ namespace FilterDataGrid
         Polish,
         Russian,
         Spanish,
-        Turkish
+        Turkish,
+        Lithuanian
     }
 
     // Contributor : dankovics.jozsef
@@ -463,6 +464,24 @@ namespace FilterDataGrid
                 { TranslatableElements.RemoveAll, "Tüm filtreleri kaldır" },
                 { TranslatableElements.Indeterminate, "Belirsiz" },
             });
+        private static ILanguageDictionary Lithuanian { get; } = new LanguageDictionary("Lithuanian", new CultureInfo("lt-LT"),
+    new Dictionary<TranslatableElements, string>
+    {
+                { TranslatableElements.All, "(Pasirinkti visus)" },
+                { TranslatableElements.Empty, "(Tuščias)" },
+                { TranslatableElements.Clear, "Išvalyti filtrą \"{0}\"" },
+                { TranslatableElements.Contains, "Paieška (tekste)" },
+                { TranslatableElements.StartsWith, "Paieška (teksto pradžia)" },
+                { TranslatableElements.Toggle, "Keisti tekste/teksto pradžia" },
+                { TranslatableElements.Ok, "Patvirtinti" },
+                { TranslatableElements.Cancel, "Atšaukti" },
+                { TranslatableElements.Status, "{0:n0} įrašai(ų) rasta {1:n0}" },
+                { TranslatableElements.ElapsedTime, "Paieškos laikas {0:mm}:{0:ss}.{0:ff}" },
+                { TranslatableElements.True, "Pažymėtas" },
+                { TranslatableElements.False, "Atžymėtas" },
+                { TranslatableElements.RemoveAll, "Panaikinti filtrus" },
+                { TranslatableElements.Indeterminate, "Neapibrėžta" },
+    });
 
         private ILanguageDictionary SelectedLanguage { get; set; }
 

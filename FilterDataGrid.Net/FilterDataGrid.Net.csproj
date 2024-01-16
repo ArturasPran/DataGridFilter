@@ -51,8 +51,8 @@
       Fix null or empty value filtering.
       Removing net.5.0 support
     </PackageReleaseNotes>
-    <SignAssembly>True</SignAssembly>
-    <AssemblyOriginatorKeyFile>C:\Users\GILLES\source\repos\macgile\FilterDataGrid.Production\NuGet\FilterDataGrid.snk</AssemblyOriginatorKeyFile>
+    <!-- <SignAssembly>True</SignAssembly> -->
+    <!--<AssemblyOriginatorKeyFile>C:\Users\GILLES\source\repos\macgile\FilterDataGrid.Production\NuGet\FilterDataGrid.snk</AssemblyOriginatorKeyFile> -->
 
   </PropertyGroup>
 

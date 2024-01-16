@@ -2,7 +2,7 @@
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <TargetFramework>net7.0-windows</TargetFramework>
+    <TargetFramework>net7.0-windows7.0</TargetFramework>
     <RootNamespace>DemoApp.Net7._0</RootNamespace>
     <UseWPF>true</UseWPF>
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
@@ -11,8 +11,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\FilterDataGrid.Net\FilterDataGrid.Net.csproj"
-                      AdditionalProperties="TargetFramework=net7.0-windows" />
+    <ProjectReference Include="..\FilterDataGrid.Net\FilterDataGrid.Net.csproj" AdditionalProperties="TargetFramework=net7.0-windows" />
   </ItemGroup>
 
   <Import Project="..\SharedModelView\SharedModelView.projitems" Label="Shared" />
