@@ -2,7 +2,7 @@
 
 // Author     : Gilles Macabies
 // Solution   : FilterDataGrid
-// Projet     : FilterDataGrid.Net5.0
+// Projet     : FilterDataGrid.Net
 // File       : FilterDataGrid.cs
 // Created    : 06/03/2022
 //
@@ -26,10 +26,12 @@ using System.Windows.Data;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
+// ReSharper disable All
 
 // ReSharper disable MemberCanBePrivate.Global
 // ReSharper disable UseNameofForDependencyProperty
 // ReSharper disable ConvertIfStatementToNullCoalescingAssignment
+// ReSharper disable PropertyCanBeMadeInitOnly.Local
 
 namespace FilterDataGrid
 {
@@ -45,8 +47,8 @@ namespace FilterDataGrid
         /// </summary>
         public FilterDataGrid()
         {
-            Debug.WriteLineIf(DebugMode, "FilterDataGrid.Constructor");    
-            
+            Debug.WriteLineIf(DebugMode, "FilterDataGrid.Constructor");
+
             DefaultStyleKey = typeof(FilterDataGrid);
 
             // load resources
@@ -64,13 +66,13 @@ namespace FilterDataGrid
                 Y = (double)TryFindResource("PopupHeight")
             };
 
-            CommandBindings.Add(new CommandBinding(ShowFilter, ShowFilterCommand, CanShowFilter));
             CommandBindings.Add(new CommandBinding(ApplyFilter, ApplyFilterCommand, CanApplyFilter)); // Ok
             CommandBindings.Add(new CommandBinding(CancelFilter, CancelFilterCommand));
-            CommandBindings.Add(new CommandBinding(RemoveFilter, RemoveFilterCommand, CanRemoveFilter));
-            CommandBindings.Add(new CommandBinding(IsChecked, CheckedAllCommand));
             CommandBindings.Add(new CommandBinding(ClearSearchBox, ClearSearchBoxClick));
-            CommandBindings.Add(new CommandBinding(RemoveAllFilter, RemoveAllFilterCommand, CanRemoveAllFilter));
+            CommandBindings.Add(new CommandBinding(IsChecked, CheckedAllCommand));
+            CommandBindings.Add(new CommandBinding(RemoveAllFilters, RemoveAllFilterCommand, CanRemoveAllFilter));
+            CommandBindings.Add(new CommandBinding(RemoveFilter, RemoveFilterCommand, CanRemoveFilter));
+            CommandBindings.Add(new CommandBinding(ShowFilter, ShowFilterCommand, CanShowFilter));
         }
 
         static FilterDataGrid()
@@ -89,7 +91,7 @@ namespace FilterDataGrid
         public static readonly ICommand CancelFilter = new RoutedCommand();
         public static readonly ICommand ClearSearchBox = new RoutedCommand();
         public static readonly ICommand IsChecked = new RoutedCommand();
-        public static readonly ICommand RemoveAllFilter = new RoutedCommand();
+        public static readonly ICommand RemoveAllFilters = new RoutedCommand();
         public static readonly ICommand RemoveFilter = new RoutedCommand();
         public static readonly ICommand ShowFilter = new RoutedCommand();
 
@@ -98,10 +100,19 @@ namespace FilterDataGrid
         #region Public DependencyProperty
 
         /// <summary>
-        ///     Excluded Fields only AutoGeneratingColumn
+        ///     Excluded Fields (only AutoGeneratingColumn)
         /// </summary>
         public static readonly DependencyProperty ExcludeFieldsProperty =
             DependencyProperty.Register("ExcludeFields",
+                typeof(string),
+                typeof(FilterDataGrid),
+                new PropertyMetadata(""));
+
+        /// <summary>
+        ///     Excluded Column (only AutoGeneratingColumn)
+        /// </summary>
+        public static readonly DependencyProperty ExcludeColumnsProperty =
+            DependencyProperty.Register("ExcludeColumns",
                 typeof(string),
                 typeof(FilterDataGrid),
                 new PropertyMetadata(""));
@@ -162,9 +173,7 @@ namespace FilterDataGrid
 
         /// <summary>
         ///     Filter popup background property.
-        ///     Allows the user to set a custom background color for the filter popup.
-        ///     When nothing is set, the default value is null, which tells TargetNullValue
-        ///     to bind the default host window background color.
+        ///     Allows the user to set a custom background color for the filter popup. When nothing is set, the default value is background color of host windows.
         /// </summary>
         public static readonly DependencyProperty FilterPopupBackgroundProperty =
             DependencyProperty.Register("FilterPopupBackground",
@@ -189,7 +198,7 @@ namespace FilterDataGrid
         private string fileName = "persistentFilter.json";
         private Stopwatch stopWatchFilter = new Stopwatch();
         private DataGridColumnHeadersPresenter columnHeadersPresenter;
-        private bool pending;
+        private bool currentlyFiltering;
         private bool search;
         private Button button;
 
@@ -202,6 +211,7 @@ namespace FilterDataGrid
         private Grid sizableContentGrid;
 
         private List<string> excludedFields;
+        private List<string> excludedColumns;
         private List<FilterItemDate> treeView;
         private List<FilterItem> listBoxItems;
 
@@ -234,6 +244,15 @@ namespace FilterDataGrid
         {
             get => (string)GetValue(ExcludeFieldsProperty);
             set => SetValue(ExcludeFieldsProperty, value);
+        }
+
+        /// <summary>
+        ///     Excluded Columns (AutoGeneratingColumn)
+        /// </summary>
+        public string ExcludeColumns
+        {
+            get => (string)GetValue(ExcludeColumnsProperty);
+            set => SetValue(ExcludeColumnsProperty, value);
         }
 
         /// <summary>
@@ -385,6 +404,7 @@ namespace FilterDataGrid
         private ICollectionView CollectionViewSource { get; set; }
         private ICollectionView ItemCollectionView { get; set; }
         private List<FilterCommon> GlobalFilterList { get; } = new List<FilterCommon>();
+        private bool PresetLoaded { get; set; }
 
         /// <summary>
         /// Popup filtered items (ListBox/TreeView)
@@ -407,6 +427,7 @@ namespace FilterDataGrid
         // Constructor
         // OnInitialized
         // OnItemsSourceChanged
+        // OnLoaded
 
         /// <summary>
         ///     Initialize datagrid
@@ -425,7 +446,10 @@ namespace FilterDataGrid
 
                 // fill excluded Fields list with values
                 if (AutoGenerateColumns)
+                {
                     excludedFields = ExcludeFields.Split(',').Select(p => p.Trim()).ToList();
+                    excludedColumns = ExcludeColumns.Split(',').Select(p => p.Trim()).ToList();
+                }
 
                 // sorting event
                 Sorted += OnSorted;
@@ -435,7 +459,7 @@ namespace FilterDataGrid
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"FilterDataGrid.OnInitialized : {ex.Message}");
+                Debug.WriteLine($"OnInitialized : {ex.Message}");
                 throw;
             }
         }
@@ -452,41 +476,88 @@ namespace FilterDataGrid
 
             try
             {
-                if (e.Column.GetType() != typeof(System.Windows.Controls.DataGridTextColumn)) return;
-
-                var column = new DataGridTextColumn
+                // ignore excluded columns
+                if (excludedColumns.Any(
+                        x => string.Equals(x, e.PropertyName, StringComparison.CurrentCultureIgnoreCase)))
                 {
-                    Binding = new Binding(e.PropertyName) { ConverterCulture = Translate.Culture /* StringFormat */ },
-                    FieldName = e.PropertyName,
-                    Header = e.Column.Header.ToString(),
-                    IsColumnFiltered = false
-                };
+                    e.Cancel = true;
+                    return;
+                }
+
+                // enable column sorting when user specified
+                e.Column.CanUserSort = CanUserSortColumns;
+
+                // return if the field is excluded
+                if (excludedFields.Any(c =>
+                        string.Equals(c, e.PropertyName, StringComparison.CurrentCultureIgnoreCase))) return;
+
+                // template
+                var template = (DataTemplate)TryFindResource("DataGridHeaderTemplate");
 
                 // get type
                 fieldType = Nullable.GetUnderlyingType(e.PropertyType) ?? e.PropertyType;
 
-                // apply the format string provided
-                if (fieldType == typeof(DateTime) && !string.IsNullOrEmpty(DateFormatString))
-                    column.Binding.StringFormat = DateFormatString;
-
-                // if the type does not belong to the "System" namespace, disable sorting (excludes nested objects)
-                if (!fieldType.IsSystemType())
+                if (fieldType.IsEnum)
                 {
-                    column.CanUserSort = false;
-                }
-                // add the "DataGridHeaderTemplate" template if the field is not excluded 
-                else if (fieldType.IsSystemType() && excludedFields?.FindIndex(c =>
-                             string.Equals(c, e.PropertyName, StringComparison.CurrentCultureIgnoreCase)) == -1)
-                {
-                    column.HeaderTemplate = (DataTemplate)TryFindResource("DataGridHeaderTemplate");
-                    column.IsColumnFiltered = true;
-                }
+                    var column = new DataGridComboBoxColumn
+                    {
+                        ItemsSource = ((System.Windows.Controls.DataGridComboBoxColumn)e.Column).ItemsSource,
+                        SelectedItemBinding = new Binding(e.PropertyName),
+                        FieldName = e.PropertyName,
+                        Header = e.Column.Header.ToString(),
+                        HeaderTemplate = template,
+                        IsSingle = false, // eNum is not a unique value (unique identifier)
+                        IsColumnFiltered = true
+                    };
 
-                e.Column = column;
+                    e.Column = column;
+                }
+                else if (fieldType == typeof(bool))
+                {
+                    var column = new DataGridCheckBoxColumn
+                    {
+                        Binding = new Binding(e.PropertyName) { ConverterCulture = Translate.Culture },
+                        FieldName = e.PropertyName,
+                        Header = e.Column.Header.ToString(),
+                        HeaderTemplate = template,
+                        IsColumnFiltered = true
+                    };
+
+                    e.Column = column;
+                }
+                else
+                {
+                    var column = new DataGridTextColumn
+                    {
+                        Binding = new Binding(e.PropertyName) { ConverterCulture = Translate.Culture },
+                        FieldName = e.PropertyName,
+                        Header = e.Column.Header.ToString(),
+                        IsColumnFiltered = true
+                    };
+
+                    // apply the format string provided
+                    if (fieldType == typeof(DateTime) && !string.IsNullOrEmpty(DateFormatString))
+                        column.Binding.StringFormat = DateFormatString;
+
+                    // if the type does not belong to the "System" namespace, disable sorting
+                    if (!fieldType.IsSystemType())
+                    {
+                        column.CanUserSort = false;
+
+                        // if the type is a nested object (class), disable cell editing
+                        column.IsReadOnly = fieldType.IsClass;
+                    }
+                    else
+                    {
+                        column.HeaderTemplate = template;
+                    }
+
+                    e.Column = column;
+                }
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"FilterDataGrid.OnAutoGeneratingColumn : {ex.Message}");
+                Debug.WriteLine($"OnAutoGeneratingColumn : {ex.Message}");
                 throw;
             }
         }
@@ -498,27 +569,31 @@ namespace FilterDataGrid
         /// <param name="newValue"></param>
         protected override void OnItemsSourceChanged(IEnumerable oldValue, IEnumerable newValue)
         {
-            Debug.WriteLineIf(DebugMode, "OnItemsSourceChanged");
+            Debug.WriteLineIf(DebugMode, $"\nOnItemsSourceChanged Auto : {AutoGenerateColumns}");
 
             base.OnItemsSourceChanged(oldValue, newValue);
 
             try
             {
-                if (newValue == null) return;
+                // remove previous event : Contribution mcboothy
+                if (oldValue is INotifyCollectionChanged collectionChanged)
+                    collectionChanged.CollectionChanged -= ItemSourceCollectionChanged;
+
+                if (newValue == null)
+                {
+                    RemoveFilters();
+
+                    // remove custom HeaderTemplate
+                    foreach (var col in Columns)
+                    {
+                        col.HeaderTemplate = null;
+                    }
+                    return;
+                }
 
                 if (oldValue != null)
                 {
-                    // reset current filter, !important
-                    CurrentFilter = null;
-
-                    // reset GlobalFilterList list
-                    GlobalFilterList.Clear();
-
-                    // reset criteria List
-                    criteria.Clear();
-
-                    if (oldValue is INotifyCollectionChanged)
-                        ((INotifyCollectionChanged)oldValue).CollectionChanged -= ItemSource_CollectionChanged;
+                    RemoveFilters();
 
                     // free previous resource
                     CollectionViewSource = System.Windows.Data.CollectionViewSource.GetDefaultView(new object());
@@ -528,8 +603,9 @@ namespace FilterDataGrid
                     scrollViewer?.ScrollToTop();
                 }
 
-                if (newValue is INotifyCollectionChanged)
-                    ((INotifyCollectionChanged)newValue).CollectionChanged += ItemSource_CollectionChanged;
+                // add new event : Contribution mcboothy
+                if (newValue is INotifyCollectionChanged changed)
+                    changed.CollectionChanged += ItemSourceCollectionChanged;
 
                 CollectionViewSource = System.Windows.Data.CollectionViewSource.GetDefaultView(ItemsSource);
 
@@ -538,7 +614,9 @@ namespace FilterDataGrid
 
                 ItemsSourceCount = Items.Count;
                 ElapsedTime = new TimeSpan(0, 0, 0);
+
                 OnPropertyChanged(nameof(ItemsSourceCount));
+                OnPropertyChanged(nameof(GlobalFilterList));
 
                 // Calculate row header width
                 if (ShowRowsCount)
@@ -561,7 +639,6 @@ namespace FilterDataGrid
                 }
 
                 // get collection type
-                //if (ItemsSourceCount > 0) // commented out as this caused a NPE if the ItemSource is empty when attempting to show the filter
                 // contribution : APFLKUACHA
                 collectionType = ItemsSource is ICollectionView collectionView
                     ? collectionView.SourceCollection?.GetType().GenericTypeArguments.FirstOrDefault()
@@ -570,17 +647,20 @@ namespace FilterDataGrid
                 // set name of persistent filter json file
                 // The name of the file is defined by the "Name" property of the FilterDatGrid, otherwise
                 // the name of the source collection type is used
-                if (PersistentFilter && collectionType != null)
-                {
+                if (collectionType != null)
                     fileName = !string.IsNullOrEmpty(Name) ? $"{Name}.json" : $"{collectionType?.Name}.json";
-                }
 
                 // generating custom columns
                 if (!AutoGenerateColumns && collectionType != null) GeneratingCustomsColumn();
+
+                // re-evalutate the command's CanExecute.
+                // when "IsReadOnly" is set to "False", "CanRemoveAllFilter" is not re-evaluated,
+                // the "Remove All Filters" icon remains active
+                CommandManager.InvalidateRequerySuggested();
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"FilterDataGrid.OnItemsSourceChanged : {ex.Message}");
+                Debug.WriteLine($"OnItemsSourceChanged : {ex.Message}");
                 throw;
             }
         }
@@ -592,7 +672,7 @@ namespace FilterDataGrid
         /// <param name="eventArgs"></param>
         protected override void OnSorting(DataGridSortingEventArgs eventArgs)
         {
-            if (pending || (popup?.IsOpen ?? false)) return;
+            if (currentlyFiltering || (popup?.IsOpen ?? false)) return;
 
             Mouse.OverrideCursor = Cursors.Wait;
             base.OnSorting(eventArgs);
@@ -628,6 +708,38 @@ namespace FilterDataGrid
             Serialize();
         }
 
+        /// <summary>
+        ///     Remove All Filters
+        /// </summary>
+        public void RemoveFilters()
+        {
+            Debug.WriteLineIf(DebugMode, "RemoveFilters");
+
+            ElapsedTime = new TimeSpan(0, 0, 0);
+
+            try
+            {
+                foreach (var filterButton in GlobalFilterList.Select(filter => filter.FilterButton))
+                {
+                    FilterState.SetIsFiltered(filterButton, false);
+                }
+
+                // reset current filter
+                CurrentFilter = null;
+                criteria.Clear();
+                GlobalFilterList.Clear();
+                CollectionViewSource?.Refresh();
+
+                // empty json file
+                if (PersistentFilter) SavePreset();
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLineIf(DebugMode, $"RemoveFilters error : {ex.Message}");
+                throw;
+            }
+        }
+
         #endregion Public Methods
 
         #region Private Methods
@@ -642,9 +754,10 @@ namespace FilterDataGrid
             Debug.WriteLineIf(DebugMode, "OnLoaded");
 
             var filterDatagrid = (FilterDataGrid)sender;
-            if (filterDatagrid?.PersistentFilter == false) return;
-            e.Handled = true;
-            filterDatagrid?.LoadPreset();
+
+            if (filterDatagrid == null || filterDatagrid.PersistentFilter == false || filterDatagrid.PresetLoaded) return;
+            filterDatagrid.PresetLoaded = true;
+            filterDatagrid.LoadPreset();
         }
 
         /// <summary>
@@ -661,88 +774,113 @@ namespace FilterDataGrid
             // set cursor
             Mouse.OverrideCursor = Cursors.Wait;
 
+            // remove all filters
             if (GlobalFilterList.Count > 0)
-                RemoveAllFilterCommand(null, null);
+                RemoveFilters();
 
             // reset previous elapsed time
             ElapsedTime = new TimeSpan(0, 0, 0);
             stopWatchFilter = Stopwatch.StartNew();
 
-            foreach (var preset in filterPreset)
+            try
             {
-                var columns = Columns
-                    .Where(c =>
-                        (c is DataGridTextColumn dtx && dtx.IsColumnFiltered & dtx.FieldName == preset.FieldName)
-                        || c is DataGridTemplateColumn dtp && dtp.IsColumnFiltered & dtp.FieldName == preset.FieldName
-                        || c is DataGridCheckBoxColumn dcb && dcb.IsColumnFiltered & dcb.FieldName == preset.FieldName
-                    )
-                    .Select(c => c)
-                    .ToList();
-
-                foreach (var col in columns)
+                foreach (var preset in filterPreset)
                 {
-                    var filterButton = VisualTreeHelpers.GetHeader(col, this)
-                        ?.FindVisualChild<Button>("FilterButton");
+                    var columns = Columns
+                        .Where(c =>
+                            (c is DataGridTextColumn dtx && dtx.IsColumnFiltered & (dtx.FieldName == preset.FieldName))
+                            || (c is DataGridTemplateColumn dtp && dtp.IsColumnFiltered & (dtp.FieldName == preset.FieldName))
+                            || (c is DataGridCheckBoxColumn dck && dck.IsColumnFiltered & (dck.FieldName == preset.FieldName))
+                            || (c is DataGridComboBoxColumn cmb && cmb.IsColumnFiltered & (cmb.FieldName == preset.FieldName))
+                        )
+                        .Select(c => c)
+                        .ToList();
 
-                    var fieldProperty = collectionType.GetPropertyInfo(preset.FieldName);
-
-                    if (fieldProperty != null)
-                        fieldType = Nullable.GetUnderlyingType(fieldProperty.PropertyType) ??
-                                    fieldProperty.PropertyType;
-
-                    if (fieldType == typeof(DateTime))
+                    foreach (var col in columns)
                     {
-                        object ConvertDateTime(object o)
+                        var filterButton = VisualTreeHelpers.GetHeader(col, this)
+                            ?.FindVisualChild<Button>("FilterButton");
+
+                        var fieldProperty = collectionType.GetPropertyInfo(preset.FieldName);
+
+                        if (fieldProperty != null)
+                            fieldType = Nullable.GetUnderlyingType(fieldProperty.PropertyType) ??
+                                        fieldProperty.PropertyType;
+
+                        if (fieldType == typeof(DateTime))
                         {
-                            var isSuccess = DateTime.TryParse(o?.ToString(), out var dateTime);
-                            // ReSharper disable once RedundantCast
-                            return isSuccess ? dateTime : (object)(DateTime?)null;
+                            object ConvertDateTime(object o)
+                            {
+                                var isSuccess = DateTime.TryParse(o?.ToString(), out var dateTime);
+                                // ReSharper disable once RedundantCast
+                                return isSuccess ? dateTime : (object)(DateTime?)null;
+                            }
+
+                            preset.PreviouslyFilteredItems = preset.PreviouslyFilteredItems
+                                .ToList()
+                                .ConvertAll(ConvertDateTime)
+                                .ToHashSet();
+                        }
+                        else if (fieldType.IsEnum)
+                        {
+                            object ConverEnum(object o)
+                            {
+                                // ReSharper disable once AssignNullToNotNullAttribute
+                                return Enum.Parse(fieldType, o.ToString());
+                            }
+
+                            preset.PreviouslyFilteredItems = preset.PreviouslyFilteredItems
+                                .ToList()
+                                .ConvertAll(ConverEnum)
+                                .ToHashSet();
                         }
 
-                        preset.PreviouslyFilteredItems = preset.PreviouslyFilteredItems
-                            .ToList()
-                            .ConvertAll(ConvertDateTime)
-                            .ToHashSet();
+                        preset.FieldType = fieldType;
+                        preset.Translate = Translate;
+                        preset.FilterButton = filterButton;
+
+                        FilterState.SetIsFiltered(filterButton, true);
+
+                        preset.AddFilter(criteria);
+
+                        // add current filter to GlobalFilterList
+                        if (GlobalFilterList.All(f => f.FieldName != preset.FieldName))
+                            GlobalFilterList.Add(preset);
+
+                        // set the current field name as the last filter name
+                        lastFilter = preset.FieldName;
                     }
-
-                    preset.FieldType = fieldType;
-                    preset.Translate = Translate;
-                    preset.FilterButton = filterButton;
-
-                    FilterState.SetIsFiltered(filterButton, true);
-
-                    preset.AddFilter(criteria);
-
-                    // add current filter to GlobalFilterList
-                    if (GlobalFilterList.All(f => f.FieldName != preset.FieldName))
-                        GlobalFilterList.Add(preset);
-
-                    // set the current field name as the last filter name
-                    lastFilter = preset.FieldName;
-
-                    // apply filter
-                    CollectionViewSource.Refresh();
                 }
-            }
 
-            // remove all predefined filters when there is no match with the source collection
-            if (Items.Count == 0)
-            {
-                RemoveAllFilterCommand(null, null);
+                if (Items.Count != 0) return;
+
+                // remove all predefined filters when there is no match with the source collection
+                RemoveFilters();
+
                 // empty json file
                 SavePreset();
             }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"OnFilterPresetChanged : {ex.Message}");
+                throw;
+            }
+            finally
+            {
+                // apply filter
+                CollectionViewSource.Refresh();
 
-            stopWatchFilter.Stop();
+                stopWatchFilter.Stop();
 
-            // show elapsed time in UI
-            ElapsedTime = stopWatchFilter.Elapsed;
+                // show elapsed time in UI
+                ElapsedTime = stopWatchFilter.Elapsed;
 
-            // reset cursor
-            ResetCursor();
+                // reset cursor
+                ResetCursor();
 
-            Debug.WriteLineIf(DebugMode,
-                $"FilterDataGrid.OnFilterPresetChanged Elapsed time : {ElapsedTime:mm\\:ss\\.ff}");
+                Debug.WriteLineIf(DebugMode,
+                    $"OnFilterPresetChanged Elapsed time : {ElapsedTime:mm\\:ss\\.ff}");
+            }
         }
 
         /// <summary>
@@ -917,6 +1055,7 @@ namespace FilterDataGrid
                     .Where(c => (c is DataGridTextColumn dtx && dtx.IsColumnFiltered)
                                 || (c is DataGridTemplateColumn dtp && dtp.IsColumnFiltered)
                                 || (c is DataGridCheckBoxColumn dcb && dcb.IsColumnFiltered)
+                                || (c is DataGridComboBoxColumn dbx && dbx.IsColumnFiltered)
                     )
                     .Select(c => c)
                     .ToList();
@@ -928,21 +1067,47 @@ namespace FilterDataGrid
 
                     if (col.HeaderTemplate != null)
                     {
+                       // Debug.WriteLineIf(DebugMode, "\tReset filter Button");
+
                         // reset filter Button
                         var buttonFilter = VisualTreeHelpers.GetHeader(col, this)
                             ?.FindVisualChild<Button>("FilterButton");
+
                         if (buttonFilter != null) FilterState.SetIsFiltered(buttonFilter, false);
+
+                        // reset the "ComboBoxItemsSource" custom property of "DataGridComboBoxColumn"
+                        // this collection may change when loading a new source collection of the DataGrid.
+                        if (columnType == typeof(DataGridComboBoxColumn))
+                            ((DataGridComboBoxColumn)col).ComboBoxItemsSource = null;
                     }
                     else
                     {
+                        Debug.WriteLineIf(DebugMode, "\tGenerate Columns");
+
+                        fieldType = null;
+                        var template = (DataTemplate)TryFindResource("DataGridHeaderTemplate");
+
+                        if (columnType == typeof(DataGridTemplateColumn))
+                        {
+                            // DataGridTemplateColumn has no culture property
+                            var column = (DataGridTemplateColumn)col;
+
+                            if (string.IsNullOrEmpty(column.FieldName))
+                                throw new ArgumentException("Value of \"FieldName\" property cannot be null.",
+                                    nameof(DataGridTemplateColumn));
+                            // template
+                            column.HeaderTemplate = template;
+                        }
+
                         if (columnType == typeof(DataGridTextColumn))
                         {
                             var column = (DataGridTextColumn)col;
 
-                            // template
-                            column.HeaderTemplate = (DataTemplate)TryFindResource("DataGridHeaderTemplate");
+                            column.FieldName = ((Binding)column.Binding).Path.Path;
 
-                            fieldType = null;
+                            // template
+                            column.HeaderTemplate = template;
+
                             var fieldProperty = collectionType.GetProperty(((Binding)column.Binding).Path.Path);
 
                             // get type or underlying type if nullable
@@ -955,20 +1120,11 @@ namespace FilterDataGrid
                                 if (string.IsNullOrEmpty(column.Binding.StringFormat))
                                     column.Binding.StringFormat = DateFormatString;
 
+                            FieldType = fieldType;
+
                             // culture
                             if (((Binding)column.Binding).ConverterCulture == null)
                                 ((Binding)column.Binding).ConverterCulture = Translate.Culture;
-
-                            column.FieldName = ((Binding)column.Binding).Path.Path;
-                        }
-
-                        if (columnType == typeof(DataGridTemplateColumn))
-                        {
-                            // DataGridTemplateColumn has no culture property
-                            var column = (DataGridTemplateColumn)col;
-
-                            // template
-                            column.HeaderTemplate = (DataTemplate)TryFindResource("DataGridHeaderTemplate");
                         }
 
                         if (columnType == typeof(DataGridCheckBoxColumn))
@@ -977,19 +1133,56 @@ namespace FilterDataGrid
 
                             column.FieldName = ((Binding)column.Binding).Path.Path;
 
+                            // template
+                            column.HeaderTemplate = template;
+
                             // culture
                             if (((Binding)column.Binding).ConverterCulture == null)
                                 ((Binding)column.Binding).ConverterCulture = Translate.Culture;
+                        }
 
-                            // template
-                            column.HeaderTemplate = (DataTemplate)TryFindResource("DataGridHeaderTemplate");
+                        if (columnType == typeof(DataGridComboBoxColumn))
+                        {
+                            var column = (DataGridComboBoxColumn)col;
+
+                            if (column.ItemsSource == null) return;
+
+                            var binding = (Binding)column.SelectedValueBinding ?? (Binding)column.SelectedItemBinding;
+
+                            // check if binding is missing
+                            if (binding != null)
+                            {
+                                column.FieldName = binding.Path.Path;
+
+                                // template
+                                column.HeaderTemplate = template;
+
+                                var fieldProperty = collectionType.GetPropertyInfo(column.FieldName);
+
+                                // get type or underlying type if nullable
+                                if (fieldProperty != null)
+                                    fieldType = Nullable.GetUnderlyingType(fieldProperty.PropertyType) ??
+                                                fieldProperty.PropertyType;
+
+                                // check if it is a unique id type and not nested object
+                                column.IsSingle = fieldType.IsSystemType();
+
+                                // culture
+                                if (binding.ConverterCulture == null) binding.ConverterCulture = Translate.Culture;
+                            }
+                            else
+                            {
+                                throw new ArgumentException(
+                                    "Value of \"SelectedValueBinding\" property or \"SelectedItemBinding\" cannot be null.",
+                                    nameof(DataGridComboBoxColumn));
+                            }
                         }
                     }
                 }
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"FilterDataGrid.GeneratingCustomColumn : {ex.Message}");
+                Debug.WriteLine($"GeneratingCustomColumn : {ex.Message}");
                 throw;
             }
         }
@@ -1010,6 +1203,7 @@ namespace FilterDataGrid
         private async void ResetCursor()
         {
             // reset cursor
+            // Cast Action : compatibility Net4.8
             await Dispatcher.BeginInvoke((Action)(() => { Mouse.OverrideCursor = null; }),
                 DispatcherPriority.ContextIdle);
         }
@@ -1074,7 +1268,7 @@ namespace FilterDataGrid
         /// <param name="e"></param>
         private void CanShowFilter(object sender, CanExecuteRoutedEventArgs e)
         {
-            e.CanExecute = CollectionViewSource?.CanFilter == true && (!popup?.IsOpen ?? true) && !pending;
+            e.CanExecute = CollectionViewSource?.CanFilter == true && (!popup?.IsOpen ?? true) && !currentlyFiltering;
         }
 
         /// <summary>
@@ -1187,15 +1381,14 @@ namespace FilterDataGrid
             var pop = (Popup)sender;
 
             // free the resources if the popup is closed without filtering
-            if (!pending)
+            if (!currentlyFiltering)
             {
-                // clear resources
-                ItemCollectionView = System.Windows.Data.CollectionViewSource.GetDefaultView(new object());
                 CurrentFilter = null;
+                ItemCollectionView = System.Windows.Data.CollectionViewSource.GetDefaultView(new object());
                 ResetCursor();
             }
 
-            // unsubscribe from event and re-enable datagrid
+            // free the resources, unsubscribe from event and re-enable columnHeadersPresenter
             pop.Closed -= PopupClosed;
             pop.MouseDown -= onMousedown;
             searchTextBox.TextChanged -= SearchTextBoxOnTextChanged;
@@ -1207,11 +1400,9 @@ namespace FilterDataGrid
             sizableContentGrid.Height = sizableContentHeight;
             Cursor = cursor;
 
+            // once the popup is closed, this is no longer necessary
             ListBoxItems = new List<FilterItem>();
             TreeViewItems = new List<FilterItemDate>();
-
-            searchText = string.Empty;
-            search = false;
 
             // re-enable columnHeadersPresenter
             if (columnHeadersPresenter != null)
@@ -1219,46 +1410,13 @@ namespace FilterDataGrid
         }
 
         /// <summary>
-        /// Remove All Filter
+        ///     Remove All Filter Command
         /// </summary>
         /// <param name="sender"></param>
         /// <param name="e"></param>
         private void RemoveAllFilterCommand(object sender, ExecutedRoutedEventArgs e)
         {
-            ElapsedTime = new TimeSpan(0, 0, 0);
-            if (GlobalFilterList.Count == 0) return;
-
-            try
-            {
-                var columns = Columns
-                    .Where(c =>
-                        (c is DataGridTextColumn dtx && dtx.IsColumnFiltered)
-                        || c is DataGridTemplateColumn dtp && dtp.IsColumnFiltered
-                        || c is DataGridCheckBoxColumn dcb && dcb.IsColumnFiltered
-                    )
-                    .Select(c => c)
-                    .ToList();
-
-                foreach (var filterButton in columns.Select(col => VisualTreeHelpers.GetHeader(col, this)
-                             ?.FindVisualChild<Button>("FilterButton")).Where(filterButton => filterButton != null))
-                {
-                    FilterState.SetIsFiltered(filterButton, false);
-                }
-
-                criteria.Clear();
-                GlobalFilterList.Clear();
-                ItemCollectionView = System.Windows.Data.CollectionViewSource.GetDefaultView(new object());
-                CollectionViewSource.Refresh();
-
-                // empty json file
-                if (PersistentFilter)
-                    SavePreset();
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLineIf(DebugMode, $"FilterDataGrid.RemoveAllFilterCommand error : {ex.Message}");
-                throw;
-            }
+            RemoveFilters();
         }
 
         /// <summary>
@@ -1284,12 +1442,11 @@ namespace FilterDataGrid
                 CollectionViewSource.Refresh();
 
             if (GlobalFilterList.Contains(CurrentFilter))
-                _ = GlobalFilterList.Remove(CurrentFilter);
+                GlobalFilterList.Remove(CurrentFilter);
 
             // set the last filter applied
             lastFilter = GlobalFilterList.LastOrDefault()?.FieldName;
 
-            CurrentFilter.IsFiltered = false;
             CurrentFilter = null;
             ResetCursor();
 
@@ -1301,7 +1458,7 @@ namespace FilterDataGrid
         }
 
         /// <summary>
-        ///     remove current filter
+        ///     Remove Current Filter Command
         /// </summary>
         /// <param name="sender"></param>
         /// <param name="e"></param>
@@ -1311,7 +1468,7 @@ namespace FilterDataGrid
         }
 
         /// <summary>
-        ///     Filter current list in popup
+        ///     Apply the filter to the items in the popup List/Treeview
         /// </summary>
         /// <param name="obj"></param>
         /// <returns></returns>
@@ -1341,12 +1498,11 @@ namespace FilterDataGrid
         /// <param name="e"></param>
         private void SearchTextBoxOnTextChanged(object sender, TextChangedEventArgs e)
         {
+            e.Handled = true;
             var textBox = (TextBox)sender;
 
             // fix TextChanged event fires twice I did not find another solution
             if (textBox == null || textBox.Text == searchText || ItemCollectionView == null) return;
-
-            e.Handled = true;
 
             searchText = textBox.Text;
 
@@ -1406,7 +1562,7 @@ namespace FilterDataGrid
 
                 // navigate up to the current header and get column type
                 var header = VisualTreeHelpers.FindAncestor<DataGridColumnHeader>(button);
-                var columnType = header.Column.GetType();
+                var headerColumn = header.Column;
 
                 // then down to the current popup
                 popup = VisualTreeHelpers.FindChild<Popup>(header, "FilterPopup");
@@ -1451,30 +1607,47 @@ namespace FilterDataGrid
                 thumb.DragDelta += OnResizeThumbDragDelta;
                 thumb.DragStarted += OnResizeThumbDragStarted;
 
+                List<FilterItem> filterItemList = null;
+                DataGridComboBoxColumn comboxColumn = null;
+
                 // get field name from binding Path
-                if (columnType == typeof(DataGridTextColumn))
+                // ReSharper disable once ConvertIfStatementToSwitchStatement
+                if (headerColumn is DataGridTextColumn textColumn)
                 {
-                    var column = (DataGridTextColumn)header.Column;
-                    fieldName = column.FieldName;
+                    fieldName = textColumn.FieldName;
                 }
-
-                if (columnType == typeof(DataGridTemplateColumn))
+                if (headerColumn is DataGridTemplateColumn templateColumn)
                 {
-                    var column = (DataGridTemplateColumn)header.Column;
-                    fieldName = column.FieldName;
+                    fieldName = templateColumn.FieldName;
                 }
-
-                if (columnType == typeof(DataGridCheckBoxColumn))
+                if (headerColumn is DataGridCheckBoxColumn checkBoxColumn)
                 {
-                    var column = (DataGridCheckBoxColumn)header.Column;
-                    fieldName = column.FieldName;
+                    fieldName = checkBoxColumn.FieldName;
+                }
+                if (headerColumn is DataGridComboBoxColumn comboBoxColumn)
+                {
+                    fieldName = comboBoxColumn.FieldName;
+                    comboxColumn = comboBoxColumn;
+
+                    // Generates the list from "ItemsSource" of the combobox column, this will essentially be used to provide
+                    // the filter labels for this type of column.
+                    // Only for a column linked by an identifier(like ID) from any other collection (ItemsSource).
+
+                    if (comboxColumn.IsSingle && comboxColumn.ComboBoxItemsSource == null)
+                        comboxColumn.ComboBoxItemsSource = new List<ItemsSourceMembers>(comboxColumn.ItemsSource
+                            .Cast<object>()
+                            .Select(x =>
+                                new ItemsSourceMembers
+                                {
+                                    SelectedValue = x.GetPropertyValue(comboxColumn.SelectedValuePath).ToString(),
+                                    DisplayMember = x.GetPropertyValue(comboxColumn.DisplayMemberPath).ToString()
+                                })).ToList();
                 }
 
                 // invalid fieldName
                 if (string.IsNullOrEmpty(fieldName)) return;
 
-                // get type of field
-                fieldType = null;
+                // see Extensions helper for GetPropertyInfo
                 var fieldProperty = collectionType.GetPropertyInfo(fieldName);
 
                 // get type or underlying type if nullable
@@ -1491,32 +1664,27 @@ namespace FilterDataGrid
                                     FilterButton = button
                                 };
 
-                // list of all item values, filtered and unfiltered (previous filtered items)
-                var sourceObjectList = new List<object>();
-
                 // set cursor
                 Mouse.OverrideCursor = Cursors.Wait;
 
-                List<FilterItem> filterItemList = null;
-
-                // get the list of values distinct from the list of raw values of the current column
-                await Task.Run(() =>
+                // contribution : STEFAN HEIMEL
+                await Dispatcher.InvokeAsync(() =>
                 {
-                    // contribution : STEFAN HEIMEL
-                    Dispatcher.Invoke(() =>
-                    {
-                        if (fieldType == typeof(DateTime))
-                            // possible distinct values because time part is removed
-                            sourceObjectList = Items.Cast<object>()
-                                .Select(x => (object)((DateTime?)x.GetPropertyValue(fieldName))?.Date)
-                                .Distinct()
-                                .ToList();
-                        else
-                            sourceObjectList = Items.Cast<object>()
-                                .Select(x => x.GetPropertyValue(fieldName))
-                                .Distinct()
-                                .ToList();
-                    });
+                    // list for all items values, filtered and unfiltered (previous filtered items)
+                    List<object> sourceObjectList;
+
+                    // get the list of raw values of the current column
+                    if (fieldType == typeof(DateTime))
+                        // possible distinct values because time part is removed
+                        sourceObjectList = Items.Cast<object>()
+                            .Select(x => (object)((DateTime?)x.GetPropertyValue(fieldName))?.Date)
+                            .Distinct()
+                            .ToList();
+                    else
+                        sourceObjectList = Items.Cast<object>()
+                            .Select(x => x.GetPropertyValue(fieldName))
+                            .Distinct()
+                            .ToList();
 
                     // adds the previous filtered items to the list of new items (CurrentFilter.PreviouslyFilteredItems)
                     if (lastFilter == CurrentFilter.FieldName)
@@ -1533,35 +1701,26 @@ namespace FilterDataGrid
                     sourceObjectList = sourceObjectList.AsParallel().OrderBy(x => x).ToList();
 
                     if (fieldType == typeof(bool))
-                    {
                         filterItemList = new List<FilterItem>(sourceObjectList.Count + 1);
-                    }
                     else
-                    {
                         // add the first element (select all) at the top of list
                         filterItemList = new List<FilterItem>(sourceObjectList.Count + 2)
                         {
+                            // ReSharper disable once ArrangeObjectCreationWhenTypeEvident (compatibility with Net4.8)
                             new FilterItem { Label = Translate.All, IsChecked = true, Level = 0 }
                         };
-                    }
 
                     // add all items (not null) to the filterItemList,
                     // the list of dates is calculated by BuildTree from this list
                     filterItemList.AddRange(sourceObjectList.Select(item => new FilterItem
                     {
                         Content = item,
-                        ContentLength = item?.ToString()?.Length ?? 0,
+                        ContentLength = item?.ToString().Length ?? 0,
                         FieldType = fieldType,
-                        Label = item,
+                        Label = Getlabel(item, fieldType),
                         Level = 1,
                         Initialize = CurrentFilter.PreviouslyFilteredItems?.Contains(item) == false
                     }));
-
-                    if (fieldType == typeof(bool))
-                        filterItemList.ToList().ForEach(c =>
-                        {
-                            c.Label = (bool)c.Content ? Translate.IsTrue : Translate.IsFalse;
-                        });
 
                     // add a empty item(if exist) at the bottom of the list
                     if (!emptyItem) return;
@@ -1576,7 +1735,25 @@ namespace FilterDataGrid
                         Level = -1,
                         Initialize = CurrentFilter?.PreviouslyFilteredItems?.Contains(null) == false
                     });
-                });
+                    return;
+
+                    string Getlabel(object o, Type type)
+                    {
+                        string label;
+
+                        // retrieve the label of the list previously reconstituted from "ItemsSource" of the combobox
+                        if (comboxColumn?.IsSingle == true)
+                            label = comboxColumn.ComboBoxItemsSource
+                                ?.FirstOrDefault(x => x.SelectedValue == o.ToString())?.DisplayMember;
+                        else
+                            // label of other columns
+                            label = type != typeof(bool) ? o.ToString()
+                                // translates boolean value label
+                                : o != null && (bool)o ? Translate.IsTrue : Translate.IsFalse;
+
+                        return label;
+                    }
+                }); // Dispatcher
 
                 // ItemsSource (ListBow/TreeView)
                 if (fieldType == typeof(DateTime))
@@ -1605,7 +1782,7 @@ namespace FilterDataGrid
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"FilterDataGrid.ShowFilterCommand error : {ex.Message}");
+                Debug.WriteLine($"ShowFilterCommand error : {ex.Message}");
                 throw;
             }
             finally
@@ -1619,7 +1796,7 @@ namespace FilterDataGrid
                 ElapsedTime = stopWatchFilter.Elapsed;
 
                 Debug.WriteLineIf(DebugMode,
-                    $"FilterDataGrid.ShowFilterCommand Elapsed time : {ElapsedTime:mm\\:ss\\.ff}");
+                    $"ShowFilterCommand Elapsed time : {ElapsedTime:mm\\:ss\\.ff}");
             }
         }
 
@@ -1634,7 +1811,7 @@ namespace FilterDataGrid
 
             stopWatchFilter.Start();
 
-            pending = true;
+            currentlyFiltering = true;
             popup.IsOpen = false; // raise PopupClosed event
 
             // set cursor wait
@@ -1681,16 +1858,23 @@ namespace FilterDataGrid
 
                     if (blankIsChanged.IsChanged && CurrentFilter.FieldType == typeof(string))
                     {
-                        // two values, null and string.empty
+                        // two values: null and string.empty
 
-                        // if (blank) item is unchecked, add string.Empty.
-                        // at this step, the null value is already added previously
-                        if (blankIsChanged.IsChecked == false)
-                            previousFiltered.Add(string.Empty);
+                        // at this step, the null value is already added previously by the
+                        // ShowFilterCommand method
 
-                        // if (blank) item is rechecked, remove string.Empty.
-                        else if (blankIsChanged.IsChecked && previousFiltered.Any(c => c?.ToString() == string.Empty))
-                            previousFiltered.RemoveWhere(item => item?.ToString() == string.Empty);
+                        switch (blankIsChanged.IsChecked)
+                        {
+                            // if (blank) item is unchecked, add string.Empty.
+                            case false:
+                                previousFiltered.Add(string.Empty);
+                                break;
+
+                            // if (blank) item is rechecked, remove string.Empty.
+                            case true when previousFiltered.Any(c => c?.ToString() == string.Empty):
+                                previousFiltered.RemoveWhere(item => item?.ToString() == string.Empty);
+                                break;
+                        }
                     }
 
                     // add a filter if it is not already added previously
@@ -1712,28 +1896,28 @@ namespace FilterDataGrid
 
                 // remove the current filter if there is no items to filter
                 if (CurrentFilter != null && !CurrentFilter.PreviouslyFilteredItems.Any())
-                    RemoveCurrentFilter(); // call serialize (if persistent filter)
+                    RemoveCurrentFilter();
                 else if (PersistentFilter) // call serialize (if persistent filter)
                     Serialize();
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"FilterDataGrid.ApplyFilterCommand error : {ex.Message}");
+                Debug.WriteLine($"ApplyFilterCommand error : {ex.Message}");
                 throw;
             }
             finally
             {
-                //ReactivateSorting();
-                ResetCursor();
-                ItemCollectionView = System.Windows.Data.CollectionViewSource.GetDefaultView(new object());
-                pending = false;
+                // free resources (unsubscribe from the event and re-enable "columnHeadersPresenter"
+                // is done in PopupClosed method)
+                currentlyFiltering = false;
                 CurrentFilter = null;
+                ItemCollectionView = System.Windows.Data.CollectionViewSource.GetDefaultView(new object());
+                ResetCursor();
 
                 stopWatchFilter.Stop();
                 ElapsedTime = stopWatchFilter.Elapsed;
 
-                Debug.WriteLineIf(DebugMode,
-                    $"FilterDataGrid.ApplyFilterCommand Elapsed time : {ElapsedTime:mm\\:ss\\.ff}");
+                Debug.WriteLineIf(DebugMode, $@"ApplyFilterCommand Elapsed time : {ElapsedTime:mm\:ss\.ff}");
             }
         }
 
@@ -1754,81 +1938,87 @@ namespace FilterDataGrid
                 // get the host window of the datagrid, contribution : STEFAN HEIMEL
                 var hostingWindow = Window.GetWindow(this);
 
-                if (hostingWindow != null)
+                if (hostingWindow == null) return;
+
+                const double border = 1d;
+
+                // get the ContentPresenter from the hostingWindow
+                var contentPresenter = VisualTreeHelpers.FindChild<ContentPresenter>(hostingWindow);
+
+                var hostSize = new Point
                 {
-                    // greater than or equal to 0.0
-                    double MaxSize(double size) => (size >= 0.0d) ? size : 0.0d;
+                    X = contentPresenter.ActualWidth,
+                    Y = contentPresenter.ActualHeight
+                };
 
-                    const double border = 1d;
+                // get the X, Y position of the header
+                var headerContentOrigin = header.TransformToVisual(contentPresenter).Transform(new Point(0, 0));
+                var headerDataGridOrigin = header.TransformToVisual(this).Transform(new Point(0, 0));
 
-                    // get the ContentPresenter from the hostingWindow
-                    var contentPresenter = VisualTreeHelpers.FindChild<ContentPresenter>(hostingWindow);
+                var headerSize = new Point { X = header.ActualWidth, Y = header.ActualHeight };
+                var offset = popUpSize.X - headerSize.X + border;
 
-                    var hostSize = new Point
-                    {
-                        X = contentPresenter.ActualWidth,
-                        Y = contentPresenter.ActualHeight
-                    };
+                // the popup must stay in the DataGrid, move it to the left of the header, because it overflows on the right.
+                if (headerDataGridOrigin.X + headerSize.X > popUpSize.X) popup.HorizontalOffset -= offset;
 
-                    // get the X, Y position of the header
-                    var headerContentOrigin = header.TransformToVisual(contentPresenter).Transform(new Point(0, 0));
-                    var headerDataGridOrigin = header.TransformToVisual(this).Transform(new Point(0, 0));
+                // delta for max size popup
+                var delta = new Point
+                {
+                    X = hostSize.X - (headerContentOrigin.X + headerSize.X),
+                    Y = hostSize.Y - (headerContentOrigin.Y + headerSize.Y + popUpSize.Y)
+                };
 
-                    var headerSize = new Point { X = header.ActualWidth, Y = header.ActualHeight };
-                    var offset = popUpSize.X - headerSize.X + border;
+                // max size
+                grid.MaxWidth = MaxSize(popUpSize.X + delta.X - border);
+                grid.MaxHeight = MaxSize(popUpSize.Y + delta.Y - border);
 
-                    // the popup must stay in the DataGrid, move it to the left of the header, because it overflows on the right.
-                    if (headerDataGridOrigin.X + headerSize.X > popUpSize.X) popup.HorizontalOffset -= offset;
+                // remove offset
+                // contributing to the fix : VASHBALDEUS
+                if (popup.HorizontalOffset == 0)
+                    grid.MaxWidth = MaxSize(Math.Abs(grid.MaxWidth - offset));
 
-                    // delta for max size popup
-                    var delta = new Point
-                    {
-                        X = hostSize.X - (headerContentOrigin.X + headerSize.X),
-                        Y = hostSize.Y - (headerContentOrigin.Y + headerSize.Y + popUpSize.Y)
-                    };
+                if (!(delta.Y <= 0d)) return;
 
-                    // max size
-                    grid.MaxWidth = MaxSize(popUpSize.X + delta.X - border);
-                    grid.MaxHeight = MaxSize(popUpSize.Y + delta.Y - border);
+                // the height of popup is too large, reduce it, because it overflows down.
+                grid.MaxHeight = MaxSize(popUpSize.Y - Math.Abs(delta.Y) - border);
+                grid.Height = grid.MaxHeight;
 
+                // contributing to the fix : VASHBALDEUS
+                grid.MinHeight = grid.MaxHeight == 0 ? grid.MinHeight : grid.MaxHeight;
 
-                    // remove offset
-                    // contributing to the fix : VASHBALDEUS
-                    if (popup.HorizontalOffset == 0)
-                        grid.MaxWidth = MaxSize(Math.Abs(grid.MaxWidth - offset));
-
-                    // the height of popup is too large, reduce it, because it overflows down.
-                    if (delta.Y <= 0d)
-                    {
-                        grid.MaxHeight = MaxSize(popUpSize.Y - Math.Abs(delta.Y) - border);
-                        grid.Height = grid.MaxHeight;
-
-                        // contributing to the fix : VASHBALDEUS
-                        grid.MinHeight = grid.MaxHeight == 0 ? grid.MinHeight : grid.MaxHeight;
-                    }
+                // greater than or equal to 0.0
+                double MaxSize(double size)
+                {
+                    return size >= 0.0d ? size : 0.0d;
                 }
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"FilterDataGrid.PopupPlacement error : {ex.Message}");
+                Debug.WriteLine($"PopupPlacement error : {ex.Message}");
                 throw;
             }
         }
 
-        private void ItemSource_CollectionChanged(object sender, NotifyCollectionChangedEventArgs e)
+        /// <summary>
+        ///     Renumber all rows when ItemsSource uses ObservableCollection
+        ///     which implements INotifyCollectionChanged
+        ///     Contribution : mcboothy
+        /// </summary>
+        /// <param name="sender"></param>
+        /// <param name="e"></param>
+        private void ItemSourceCollectionChanged(object sender, NotifyCollectionChangedEventArgs e)
         {
+            Debug.WriteLineIf(DebugMode, "ItemSourceCollectionChanged");
+
             ItemsSourceCount = Items.Count;
             OnPropertyChanged(nameof(ItemsSourceCount));
 
             // Renumber all rows
-            for (int i = 0; i < Items.Count; i++)
-            {
+            for (var i = 0; i < Items.Count; i++)
                 if (ItemContainerGenerator.ContainerFromIndex(i) is DataGridRow row)
-                {
                     row.Header = $"{i + 1}";
-                }
-            }
         }
+
         #endregion Private Methods
     }
 }

@@ -11,6 +11,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Windows.Controls;
 using System.Runtime.Serialization;
 
@@ -28,19 +29,23 @@ namespace FilterDataGrid
 
         #endregion Private Fields
 
-        #region Public Constructors
-
-        public FilterCommon()
-        {
-            PreviouslyFilteredItems = new HashSet<object>(EqualityComparer<object>.Default);
-        }
-
-        #endregion Public Constructors
-
         #region Public Properties
 
+        public HashSet<object> PreviouslyFilteredItems { get; set; } = new HashSet<object>(EqualityComparer<object>.Default);
+
         [DataMember (Name = "FilteredItems")]
-        public HashSet<object> PreviouslyFilteredItems { get; set; }
+        public List<object> FilteredItems
+        {
+            get
+            {
+                return FieldType?.BaseType == typeof(Enum) 
+                    ? PreviouslyFilteredItems.ToList().ConvertAll(f => (object)f.ToString()) 
+                    : PreviouslyFilteredItems?.ToList();
+            }
+
+            set => PreviouslyFilteredItems = value.ToHashSet();
+        }
+        
 
         [DataMember(Name = "FieldName")]
         public string FieldName { get; set; }
@@ -69,6 +74,12 @@ namespace FilterDataGrid
         {
             if (IsFiltered) return;
 
+            // add to list of predicates
+            criteria.Add(FieldName, Predicate);
+
+            IsFiltered = true;
+            return;
+
             // predicate of filter
             bool Predicate(object o)
             {
@@ -78,11 +89,6 @@ namespace FilterDataGrid
 
                 return !PreviouslyFilteredItems.Contains(value);
             }
-
-            // add to list of predicates
-            criteria.Add(FieldName, Predicate);
-
-            IsFiltered = true;
         }
 
         #endregion Public Methods
