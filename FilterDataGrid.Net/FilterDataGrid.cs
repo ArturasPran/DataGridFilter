@@ -26,6 +26,7 @@ using System.Windows.Data;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
+// ReSharper disable All
 
 // ReSharper disable MemberCanBePrivate.Global
 // ReSharper disable UseNameofForDependencyProperty
@@ -403,6 +404,7 @@ namespace FilterDataGrid
         private ICollectionView CollectionViewSource { get; set; }
         private ICollectionView ItemCollectionView { get; set; }
         private List<FilterCommon> GlobalFilterList { get; } = new List<FilterCommon>();
+        private bool PresetLoaded { get; set; }
 
         /// <summary>
         /// Popup filtered items (ListBox/TreeView)
@@ -645,7 +647,7 @@ namespace FilterDataGrid
                 // set name of persistent filter json file
                 // The name of the file is defined by the "Name" property of the FilterDatGrid, otherwise
                 // the name of the source collection type is used
-                if (PersistentFilter && collectionType != null)
+                if (collectionType != null)
                     fileName = !string.IsNullOrEmpty(Name) ? $"{Name}.json" : $"{collectionType?.Name}.json";
 
                 // generating custom columns
@@ -751,10 +753,11 @@ namespace FilterDataGrid
         {
             Debug.WriteLineIf(DebugMode, "OnLoaded");
 
-            e.Handled = true;
             var filterDatagrid = (FilterDataGrid)sender;
-            if (filterDatagrid?.PersistentFilter == false) return;
-            filterDatagrid?.LoadPreset();
+
+            if (filterDatagrid == null || filterDatagrid.PersistentFilter == false || filterDatagrid.PresetLoaded) return;
+            filterDatagrid.PresetLoaded = true;
+            filterDatagrid.LoadPreset();
         }
 
         /// <summary>
@@ -779,82 +782,105 @@ namespace FilterDataGrid
             ElapsedTime = new TimeSpan(0, 0, 0);
             stopWatchFilter = Stopwatch.StartNew();
 
-            foreach (var preset in filterPreset)
+            try
             {
-                var columns = Columns
-                    .Where(c =>
-                        (c is DataGridTextColumn dtx && dtx.IsColumnFiltered & (dtx.FieldName == preset.FieldName))
-                        || (c is DataGridTemplateColumn dtp && dtp.IsColumnFiltered & (dtp.FieldName == preset.FieldName))
-                        || (c is DataGridCheckBoxColumn dck && dck.IsColumnFiltered & (dck.FieldName == preset.FieldName))
-                    )
-                    .Select(c => c)
-                    .ToList();
-
-                foreach (var col in columns)
+                foreach (var preset in filterPreset)
                 {
-                    var filterButton = VisualTreeHelpers.GetHeader(col, this)
-                        ?.FindVisualChild<Button>("FilterButton");
+                    var columns = Columns
+                        .Where(c =>
+                            (c is DataGridTextColumn dtx && dtx.IsColumnFiltered & (dtx.FieldName == preset.FieldName))
+                            || (c is DataGridTemplateColumn dtp && dtp.IsColumnFiltered & (dtp.FieldName == preset.FieldName))
+                            || (c is DataGridCheckBoxColumn dck && dck.IsColumnFiltered & (dck.FieldName == preset.FieldName))
+                            || (c is DataGridComboBoxColumn cmb && cmb.IsColumnFiltered & (cmb.FieldName == preset.FieldName))
+                        )
+                        .Select(c => c)
+                        .ToList();
 
-                    var fieldProperty = collectionType.GetPropertyInfo(preset.FieldName);
-
-                    if (fieldProperty != null)
-                        fieldType = Nullable.GetUnderlyingType(fieldProperty.PropertyType) ??
-                                    fieldProperty.PropertyType;
-
-                    if (fieldType == typeof(DateTime))
+                    foreach (var col in columns)
                     {
-                        object ConvertDateTime(object o)
+                        var filterButton = VisualTreeHelpers.GetHeader(col, this)
+                            ?.FindVisualChild<Button>("FilterButton");
+
+                        var fieldProperty = collectionType.GetPropertyInfo(preset.FieldName);
+
+                        if (fieldProperty != null)
+                            fieldType = Nullable.GetUnderlyingType(fieldProperty.PropertyType) ??
+                                        fieldProperty.PropertyType;
+
+                        if (fieldType == typeof(DateTime))
                         {
-                            var isSuccess = DateTime.TryParse(o?.ToString(), out var dateTime);
-                            // ReSharper disable once RedundantCast
-                            return isSuccess ? dateTime : (object)(DateTime?)null;
+                            object ConvertDateTime(object o)
+                            {
+                                var isSuccess = DateTime.TryParse(o?.ToString(), out var dateTime);
+                                // ReSharper disable once RedundantCast
+                                return isSuccess ? dateTime : (object)(DateTime?)null;
+                            }
+
+                            preset.PreviouslyFilteredItems = preset.PreviouslyFilteredItems
+                                .ToList()
+                                .ConvertAll(ConvertDateTime)
+                                .ToHashSet();
+                        }
+                        else if (fieldType.IsEnum)
+                        {
+                            object ConverEnum(object o)
+                            {
+                                // ReSharper disable once AssignNullToNotNullAttribute
+                                return Enum.Parse(fieldType, o.ToString());
+                            }
+
+                            preset.PreviouslyFilteredItems = preset.PreviouslyFilteredItems
+                                .ToList()
+                                .ConvertAll(ConverEnum)
+                                .ToHashSet();
                         }
 
-                        preset.PreviouslyFilteredItems = preset.PreviouslyFilteredItems
-                            .ToList()
-                            .ConvertAll(ConvertDateTime)
-                            .ToHashSet();
+                        preset.FieldType = fieldType;
+                        preset.Translate = Translate;
+                        preset.FilterButton = filterButton;
+
+                        FilterState.SetIsFiltered(filterButton, true);
+
+                        preset.AddFilter(criteria);
+
+                        // add current filter to GlobalFilterList
+                        if (GlobalFilterList.All(f => f.FieldName != preset.FieldName))
+                            GlobalFilterList.Add(preset);
+
+                        // set the current field name as the last filter name
+                        lastFilter = preset.FieldName;
                     }
-
-                    preset.FieldType = fieldType;
-                    preset.Translate = Translate;
-                    preset.FilterButton = filterButton;
-
-                    FilterState.SetIsFiltered(filterButton, true);
-
-                    preset.AddFilter(criteria);
-
-                    // add current filter to GlobalFilterList
-                    if (GlobalFilterList.All(f => f.FieldName != preset.FieldName))
-                        GlobalFilterList.Add(preset);
-
-                    // set the current field name as the last filter name
-                    lastFilter = preset.FieldName;
-
-                    // apply filter
-                    CollectionViewSource.Refresh();
                 }
-            }
 
-            // remove all predefined filters when there is no match with the source collection
-            if (Items.Count == 0)
-            {
+                if (Items.Count != 0) return;
+
+                // remove all predefined filters when there is no match with the source collection
                 RemoveFilters();
 
                 // empty json file
                 SavePreset();
             }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"OnFilterPresetChanged : {ex.Message}");
+                throw;
+            }
+            finally
+            {
+                // apply filter
+                CollectionViewSource.Refresh();
 
-            stopWatchFilter.Stop();
+                stopWatchFilter.Stop();
 
-            // show elapsed time in UI
-            ElapsedTime = stopWatchFilter.Elapsed;
+                // show elapsed time in UI
+                ElapsedTime = stopWatchFilter.Elapsed;
 
-            // reset cursor
-            ResetCursor();
+                // reset cursor
+                ResetCursor();
 
-            Debug.WriteLineIf(DebugMode,
-                $"OnFilterPresetChanged Elapsed time : {ElapsedTime:mm\\:ss\\.ff}");
+                Debug.WriteLineIf(DebugMode,
+                    $"OnFilterPresetChanged Elapsed time : {ElapsedTime:mm\\:ss\\.ff}");
+            }
         }
 
         /// <summary>
@@ -1041,7 +1067,7 @@ namespace FilterDataGrid
 
                     if (col.HeaderTemplate != null)
                     {
-                        Debug.WriteLineIf(DebugMode, "\tReset filter Button");
+                       // Debug.WriteLineIf(DebugMode, "\tReset filter Button");
 
                         // reset filter Button
                         var buttonFilter = VisualTreeHelpers.GetHeader(col, this)
@@ -1536,7 +1562,7 @@ namespace FilterDataGrid
 
                 // navigate up to the current header and get column type
                 var header = VisualTreeHelpers.FindAncestor<DataGridColumnHeader>(button);
-                var columnType = header.Column.GetType();
+                var headerColumn = header.Column;
 
                 // then down to the current popup
                 popup = VisualTreeHelpers.FindChild<Popup>(header, "FilterPopup");
@@ -1585,41 +1611,36 @@ namespace FilterDataGrid
                 DataGridComboBoxColumn comboxColumn = null;
 
                 // get field name from binding Path
-                if (columnType == typeof(DataGridTextColumn))
+                // ReSharper disable once ConvertIfStatementToSwitchStatement
+                if (headerColumn is DataGridTextColumn textColumn)
                 {
-                    var column = (DataGridTextColumn)header.Column;
-                    fieldName = column.FieldName;
+                    fieldName = textColumn.FieldName;
                 }
-
-                if (columnType == typeof(DataGridTemplateColumn))
+                if (headerColumn is DataGridTemplateColumn templateColumn)
                 {
-                    var column = (DataGridTemplateColumn)header.Column;
-                    fieldName = column.FieldName;
+                    fieldName = templateColumn.FieldName;
                 }
-
-                if (columnType == typeof(DataGridCheckBoxColumn))
+                if (headerColumn is DataGridCheckBoxColumn checkBoxColumn)
                 {
-                    var column = (DataGridCheckBoxColumn)header.Column;
-                    fieldName = column.FieldName;
+                    fieldName = checkBoxColumn.FieldName;
                 }
-
-                if (columnType == typeof(DataGridComboBoxColumn))
+                if (headerColumn is DataGridComboBoxColumn comboBoxColumn)
                 {
-                    var column = (DataGridComboBoxColumn)header.Column;
-                    comboxColumn = column;
-                    fieldName = column.FieldName;
+                    fieldName = comboBoxColumn.FieldName;
+                    comboxColumn = comboBoxColumn;
 
                     // Generates the list from "ItemsSource" of the combobox column, this will essentially be used to provide
                     // the filter labels for this type of column.
                     // Only for a column linked by an identifier(like ID) from any other collection (ItemsSource).
-                    if (column.IsSingle && column.ComboBoxItemsSource == null)
-                        column.ComboBoxItemsSource = new List<ItemsSourceMembers>(column.ItemsSource
+
+                    if (comboxColumn.IsSingle && comboxColumn.ComboBoxItemsSource == null)
+                        comboxColumn.ComboBoxItemsSource = new List<ItemsSourceMembers>(comboxColumn.ItemsSource
                             .Cast<object>()
                             .Select(x =>
                                 new ItemsSourceMembers
                                 {
-                                    SelectedValue = x.GetPropertyValue(column.SelectedValuePath).ToString(),
-                                    DisplayMember = x.GetPropertyValue(column.DisplayMemberPath).ToString()
+                                    SelectedValue = x.GetPropertyValue(comboxColumn.SelectedValuePath).ToString(),
+                                    DisplayMember = x.GetPropertyValue(comboxColumn.DisplayMemberPath).ToString()
                                 })).ToList();
                 }
 

@@ -10,14 +10,15 @@ https://github.com/ikatyang/emoji-cheat-sheet/tree/master?tab=readme-ov-file#oth
 [![MIT license](https://img.shields.io/badge/License-MIT-blue.svg)](https://lbesson.mit-license.org/)
 [![Net Version](https://img.shields.io/badge/net%20version-net4.8%20netcore3.1%20net5.0%20net6.0%20net7.0-blue)](https://shields.io)
 
-![datagrid image demo](https://raw.githubusercontent.com/macgile/DataGridFilter/master/FilterDataGrid.png)  
+<!-- FilterDataGrid.png -->
+![datagrid image demo](https://raw.githubusercontent.com/macgile/DataGridFilter/master/filterdatagrid.png)  
 
 A DataGrid control that inherits from the base DataGrid control class and override some methods to implement filters  
 for each column like Excel, in automatic or custom generation.  
 
 Support for nested objects and filter persistence.  
 
-Translation of labels and formatting of dates in the following languages: **Chinese(traditional and simplified), Dutch, English, French, German, Hebrew, Hungarian, Italian, Japanese, Polish, Portuguese, Russian, Spanish, Turkish.**
+Translation of labels and formatting of dates in the following languages: **Czech, Chinese(traditional and simplified), Dutch, English, French, German, Hebrew, Hungarian, Italian, Japanese, Polish, Portuguese, Russian, Spanish, Turkish.**
 
  > *The translations are from google translate, if you find any errors or want to add other languages, please let me know.*
 
@@ -134,7 +135,7 @@ To understand how the filter works, you can consult the article posted on [CodeP
 >Enabling the **PersistentFilter** property saves a json file in the application folder that contains the status of active filters, any modification of the filters is immediately saved until the closing of the application, it is this state of the filters which will be loaded during the new launch of the application.  
 The name of the json file is inferred from the name you give to your FilterDataGrid control.
 
->:warning: This feature don't work with ComboBox Column.
+<!-- >:warning: This feature don't work with ComboBox Column. -->
 
 ```xml
  <control:FilterDataGrid x:Name="MyFilterDatagrid"
