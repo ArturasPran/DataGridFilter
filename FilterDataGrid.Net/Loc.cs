@@ -5,7 +5,7 @@
 // Projet     : FilterDataGrid.Net
 // File       : Loc.cs
 // Created    : 03/04/2024
-// 
+//
 
 #endregion
 
@@ -59,7 +59,7 @@ namespace FilterDataGrid
         SimplifiedChinese,
         Spanish,
         TraditionalChinese,
-        Turkish
+        Turkish,
         Lithuanian
     }
 
@@ -515,6 +515,7 @@ namespace FilterDataGrid
                 { TranslatableElements.RemoveAll, "Tüm filtreleri kaldır" },
                 { TranslatableElements.Indeterminate, "Belirsiz" },
             });
+
         private static ILanguageDictionary Lithuanian { get; } = new LanguageDictionary("Lithuanian", new CultureInfo("lt-LT"),
     new Dictionary<TranslatableElements, string>
     {
